@@ -1,0 +1,667 @@
+#include <Wire.h>
+#include <Time.h>
+#include <TimeLib.h>
+#include <LiquidCrystal.h>
+#include <Adafruit_MotorShield.h>
+#include "utility/Adafruit_MS_PWMServoDriver.h"
+
+Adafruit_MotorShield AFMS = Adafruit_MotorShield();
+
+Adafruit_StepperMotor *mySTP = AFMS.getStepper(200, 2);
+
+LiquidCrystal lcd(8, 9, 4, 5, 6, 7);
+
+long interval = 3000; // Default interval between motor rotations (1000-30000 (1000 = 1 sec))
+int sDLY = 0;         // Default Shutter Delay time (0-30000 ((1000 = 1 sec))
+int percent = 4;      // Default Screen Brightness 0-9, 10%-100%
+int mDir = HIGH;      // Default Motor Direction HIGH = right && LOW = left
+int mSPD = 1;         // Default Motor Speed (steps per interval)
+int cMI = 0;          // Default Current Menu Item 0-4
+int shutterTriggerState = 0;
+
+int pSPD = 0;             // Pervious Speed
+int vMD = 0;              // Video Mode (0-2)
+int mST = 1;              // Motor State (0 OFF, 1 ON)
+int pINT = 0;             // Pervious
+int dirSwi = 11;          // Direction Switch Pin
+int shutterPin = 12;
+boolean pDir = 0;         // Pervious Direction
+unsigned long pMIL = 0;   // Pervious Time
+int ct = 0;               // Count
+int ovrFIL = 0;           // Overflow for Direction Reversal
+int ovrFILtwo = 0;
+
+
+int lcd_key  = 0;
+int dPAD  = 0;
+#define bRT  0
+#define bUP  1
+#define bDWN 2
+#define bLT  3
+#define bSLT 4
+#define bNO  5
+
+int lcdBTNS()
+{
+  dPAD = analogRead(0);
+  if (dPAD > 1000) return bNO;
+  if (dPAD < 50)   return bRT;
+  if (dPAD < 195)  return bUP;
+  if (dPAD < 380)  return bDWN;
+  if (dPAD < 555)  return bLT;
+  if (dPAD < 790)  return bSLT;
+  return bNO;
+}
+
+byte full[8] = {
+  B11111,
+  B11111,
+  B11111,
+  B11111,
+  B11111,
+  B11111,
+  B11111,
+  B11111,
+};
+byte empty[8] = {
+  B11111,
+  B10001,
+  B10001,
+  B10001,
+  B10001,
+  B10001,
+  B10001,
+  B11111,
+};
+byte right[8] = {
+  B01000,
+  B01100,
+  B01110,
+  B11111,
+  B01110,
+  B01100,
+  B01000,
+  B00000,
+};
+byte left[8] = {
+  B00010,
+  B00110,
+  B01110,
+  B11111,
+  B01110,
+  B00110,
+  B00010,
+  B00000,
+};
+void setup() {
+
+  AFMS.begin();
+  mySTP->setSpeed(1);
+  pinMode(dirSwi, INPUT_PULLUP);
+  pinMode (shutterPin, OUTPUT);
+  lcd.createChar(0, full);
+  lcd.createChar(1, right);
+  lcd.createChar(2, left);
+  lcd.createChar(3, empty);
+  lcd.begin(16, 2);
+}
+
+void loop() {
+  delay(20);
+  analogWrite (10, percent * 25.6);
+  mainMenu();
+  pDir = digitalRead(dirSwi);
+  if (pDir == HIGH && ovrFIL < 1)
+  {
+    mDir = !mDir;
+    mySTP->step(15, mDir, MICROSTEP);
+    ovrFIL = ovrFIL + 1;
+    limits();
+    mySTP->release();
+    return;
+  }
+  else if (pDir == LOW)
+  {
+    ovrFIL = 0;
+    unsigned long cMIL = millis();
+    if (shutterTriggerState = 0 && cMIL - pMIL > interval)
+    {
+      pMIL = cMIL;
+      ct = ct + mST;
+      mySTP->step(mSPD, mDir, MICROSTEP);
+      delay(25);
+      mySTP->release();
+      delay(75);
+      return;
+    }
+    if (shutterTriggerState = 1 && cMIL - pMIL > sDLY && ovrFILtwo < 1)
+    {
+        shutterPin = HIGH;
+        delay(25);
+        shutterPin = LOW;
+        ovrFILtwo = ovrFILtwo + 1;
+    }
+      if (cMIL - pMIL > sDLY + interval)
+      {
+        pMIL = cMIL;
+        ct = ct + mST;
+        mySTP->step(mSPD, mDir, MICROSTEP);
+        delay(25);
+        mySTP->release();
+        delay(75);
+        ovrFILtwo = 0;
+        return;
+      }
+    }
+  }
+}
+
+
+void mainMenu()
+{ clrTIME();
+  limits();
+  switch (lcdBTNS())
+  { case bUP:                   //bUP
+      delay(50);
+      cMI = cMI - 1;
+      mDSP(cMI);
+      break;
+    case bDWN:                    //bDWN
+      delay(50);
+      cMI = cMI + 1;
+      mDSP(cMI);
+      break;
+    case bRT:                //bRT
+      delay(50);
+      if (cMI == 0)
+        mSPD = mSPD + 1;
+      mDSP(cMI);
+      if (cMI == 1)
+        interval = interval + 1000;
+      mDSP(cMI);
+      if (cMI == 2)
+      { sDLY = sDLY + 1000;
+        mDSP(cMI);
+      }
+      if (cMI == 3)
+      { shutterTriggerState = shutterTriggerState + 1;
+        mDSP(cMI);
+      }
+      if (cMI == 4) {
+        if (mDir == LOW)
+        {
+          vMD = vMD + 1;
+        }
+        else if (mDir == HIGH)
+        {
+          vMD = vMD - 1;
+        }
+        mDSP(cMI);
+      }
+      if (cMI == 5) {
+        percent = percent + 1;
+        mDSP(cMI);
+      }
+      break;
+    case bLT:                //bLT
+      delay(50);
+      if (cMI == 0)
+        mSPD = mSPD - 1;
+      mDSP(cMI);
+      if (cMI == 1)
+        interval = interval - 1000;
+      mDSP(cMI);
+      if (cMI == 2)
+      { sDLY = sDLY - 1000;
+        mDSP(cMI);
+      }
+      if (cMI == 3)
+      { shutterTriggerState = shutterTriggerState - 1;
+        mDSP(cMI);
+      }
+      if (cMI == 4) {
+        if (mDir == LOW)
+        {
+          vMD = vMD + 1;
+        }
+        else if (mDir == HIGH)
+        {
+          vMD = vMD - 1;
+        }
+      }
+      mDSP(cMI);
+      if (cMI == 5) {
+        percent = percent - 1;
+        mDSP(cMI);
+      }
+      break;
+    case bSLT:            //bSLT
+      delay(50);
+      if (mST = 0)
+      {
+        mSPD = mSPD + 1;
+      }
+      if (mST = 1)
+      {
+        mSPD = 0;
+      }
+      cMI = 0;
+      mDSP(cMI);
+      break;
+  }
+  limits();
+}
+
+void mDSP(int x) {
+  switch (x) {
+    case 0:
+
+      lcd.print ("SPEED");
+      if (mDir == HIGH)
+      { lcd.setCursor(6, 1);
+        lcd.print("--");
+        lcd.setCursor(8, 1);
+        lcd.write(byte(1));
+      }
+      else if (mDir == LOW)
+      { lcd.setCursor(6, 1);
+        lcd.write(byte(2));
+        lcd.setCursor(7, 1);
+        lcd.print("--");
+      }
+      if (mSPD == 0)
+      { lcd.setCursor(13, 1);
+        lcd.print ("OFF");
+        lcd.setCursor(10, 1);
+        lcd.write(byte(3));
+      }
+      else if (mSPD == 1)
+      { lcd.setCursor(10, 1);
+        lcd.write(byte(0));
+      }
+      else if (mSPD == 2)
+      { lcd.setCursor(10, 1);
+        lcd.write(byte(0));
+        lcd.setCursor(11, 1);
+        lcd.write(byte(0));
+      }
+      else if (mSPD == 3)
+      { lcd.setCursor(10, 1);
+        lcd.write(byte(0));
+        lcd.setCursor(11, 1);
+        lcd.write(byte(0));
+        lcd.setCursor(12, 1);
+        lcd.write(byte(0));
+      }
+      else if (mSPD == 4)
+      { lcd.setCursor(10, 1);
+        lcd.write(byte(0));
+        lcd.setCursor(11, 1);
+        lcd.write(byte(0));
+        lcd.setCursor(12, 1);
+        lcd.write(byte(0));
+        lcd.setCursor(13, 1);
+        lcd.write(byte(0));
+      }
+      else if (mSPD == 5)
+      { lcd.setCursor(10, 1);
+        lcd.write(byte(0));
+        lcd.setCursor(11, 1);
+        lcd.write(byte(0));
+        lcd.setCursor(12, 1);
+        lcd.write(byte(0));
+        lcd.setCursor(13, 1);
+        lcd.write(byte(0));
+        lcd.setCursor(14, 1);
+        lcd.write(byte(0));
+      }
+      else if (mSPD == 6)
+      { lcd.setCursor(10, 1);
+        lcd.write(byte(0));
+        lcd.setCursor(11, 1);
+        lcd.write(byte(0));
+        lcd.setCursor(12, 1);
+        lcd.write(byte(0));
+        lcd.setCursor(13, 1);
+        lcd.write(byte(0));
+        lcd.setCursor(14, 1);
+        lcd.write(byte(0));
+        lcd.setCursor(15, 1);
+        lcd.write(byte(0));
+      }
+      break;
+    case 1:
+
+      lcd.print ("DELAY");
+      inTerval(interval);
+      break;
+    case 2:
+
+      lcd.print ("SHTRDELAY");
+      inTerval(sDLY);
+      break;
+    case 3:
+
+      lcd.print ("SHTR TRIGGER");
+      cameraTrigger(shutterTriggerState);
+      break;
+    case 4:
+
+      lcd.print ("VIDEO MODE");
+      vDSP(vMD);
+      break;
+    case 5:
+
+      lcd.print ("BRIGHTNESS");
+      bakLT(percent);
+      break;
+  }
+}
+
+void clrTIME() {
+  lcd.clear();
+
+  if (ct < 1000)
+  { lcd.setCursor(0, 0);
+    lcd.print("STEP");
+    lcd.setCursor(5, 0);
+    lcd.print(ct);
+  }
+
+  else if (ct > 1000)
+  { lcd.setCursor(0, 0);
+    lcd.print("STP");
+    lcd.setCursor(4, 0);
+    lcd.print(ct);
+  }
+  lcd.setCursor(10, 0);
+  lcd.print(":");
+  lcd.setCursor(13, 0);
+  lcd.print(":");
+
+  if (second() < 10)
+  {
+    lcd.setCursor(14, 0);
+    lcd.print("0");
+    lcd.setCursor(15, 0);
+    lcd.print(second());
+  }
+
+  else if (second() >= 10)
+  {
+    lcd.setCursor(14, 0);
+    lcd.print(second());
+  }
+
+
+  if (minute() < 10)
+  {
+    lcd.setCursor(11, 0);
+    lcd.print("0");
+    lcd.setCursor(12, 0);
+    lcd.print(minute());
+  }
+
+  else if (minute() >= 10)
+  {
+    lcd.setCursor(11, 0);
+    lcd.print(minute());
+  }
+
+
+  lcd.setCursor(9, 0);
+  lcd.print(hour());
+  lcd.setCursor(0, 1);
+  mDSP(cMI);
+  delay(20);
+}
+
+void vDSP(int y) {
+  switch (y) {
+    case 0:
+      lcd.setCursor(13, 1);
+      lcd.print ("OFF");
+      break;
+    case 1:
+      lcd.clear();
+      lcd.setCursor(2, 0);
+      lcd.print("!!WARNING!!");
+      lcd.setCursor(0, 1);
+      lcd.print("USE EXTERNAL PWR!");
+      break;
+    case 2:
+      lcd.setCursor(14, 1);
+      lcd.print("ON");
+      interval = 1;
+      break;
+  }
+}
+
+void limits()
+{ if (cMI < 0)
+  {
+    cMI = 5;
+  }
+  if (cMI > 5)
+  {
+    cMI = 0;
+  }
+  if (mSPD < 0)
+  { mSPD = 0;
+    mDir = !mDir;
+  }
+  if (mSPD == 0)
+  {
+    mST = 0;
+  }
+  if (mSPD > 0)
+  {
+    mST = 1;
+  }
+  if (mSPD > 6)
+  { mSPD = 0;
+    mDir = !mDir;
+  }
+  if (interval < 1)
+  {
+    interval = 30000;
+  }
+  if (interval > 30000)
+  {
+    interval = 1000;
+  }
+  if (vMD < 0)
+  {
+    vMD = 2;
+  }
+  if (vMD > 2)
+  {
+    vMD = 0;
+  }
+  if (percent < 1)
+  {
+    percent = 10;
+  }
+  if (percent > 10)
+  {
+    percent = 1;
+  }
+  if (sDLY < 0)
+  {
+    sDLY = 30000;
+  }
+  if (sDLY > 30000)
+  {
+    sDLY = 0;
+  }
+  if (shutterTriggerState < 0)
+  {
+    shutterTriggerState = 1;
+  }
+  if (shutterTriggerState > 1)
+  {
+    shutterTriggerState = 0;
+  }
+}
+
+void inTerval(int c) {
+  lcd.setCursor(13, 1);
+  lcd.print("Sec");
+  lcd.setCursor(10, 1);
+  switch (c) {
+    case 0:
+      lcd.print (" 0");
+      break;
+    case 1000:
+      lcd.print (" 1");
+      break;
+    case 2000:
+      lcd.print (" 2");
+      break;
+    case 3000:
+      lcd.print (" 3");
+      break;
+    case 4000:
+      lcd.print (" 4");
+      break;
+    case 5000:
+      lcd.print (" 5");
+      break;
+    case 6000:
+      lcd.print (" 6");
+      break;
+    case 7000:
+      lcd.print (" 7");
+      break;
+    case 8000:
+      lcd.print (" 8");
+      break;
+    case 9000:
+      lcd.print (" 9");
+      break;
+    case 10000:
+      lcd.print ("10");
+      break;
+    case 11000:
+      lcd.print ("11");
+      break;
+    case 12000:
+      lcd.print ("12");
+      break;
+    case 13000:
+      lcd.print ("13");
+      break;
+    case 14000:
+      lcd.print ("14");
+      break;
+    case 15000:
+      lcd.print ("15");
+      break;
+    case 16000:
+      lcd.print ("16");
+      break;
+    case 17000:
+      lcd.print ("17");
+      break;
+    case 18000:
+      lcd.print ("18");
+      break;
+    case 19000:
+      lcd.print ("19");
+      break;
+    case 20000:
+      lcd.print ("20");
+      break;
+    case 21000:
+      lcd.print ("21");
+      break;
+    case 22000:
+      lcd.print ("22");
+      break;
+    case 23000:
+      lcd.print ("23");
+      break;
+    case 24000:
+      lcd.print ("24");
+      break;
+    case 25000:
+      lcd.print ("25");
+      break;
+    case 26000:
+      lcd.print ("26");
+      break;
+    case 27000:
+      lcd.print ("27");
+      break;
+    case 28000:
+      lcd.print ("28");
+      break;
+    case 29000:
+      lcd.print ("29");
+      break;
+    case 30000:
+      lcd.print ("30");
+      break;
+  }
+}
+void bakLT(int v) {
+  lcd.setCursor(13, 1);
+  switch (v) {
+    case 1:
+      analogWrite(10, 25.6);
+      lcd.print("10%");
+      break;
+    case 2:
+      analogWrite(10, 51.2);
+      lcd.print("20%");
+      break;
+    case 3:
+      analogWrite(10, 76.8);
+      lcd.print("30%");
+      break;
+    case 4:
+      analogWrite(10, 102.4);
+      lcd.print("40%");
+      break;
+    case 5:
+      analogWrite(10, 128);
+      lcd.print("50%");
+      break;
+    case 6:
+      analogWrite(10, 153.6);
+      lcd.print("60%");
+      break;
+    case 7:
+      analogWrite(10, 179.2);
+      lcd.print("70%");
+      break;
+    case 8:
+      analogWrite(10, 204.8);
+      lcd.print("80%");
+      break;
+    case 9:
+      analogWrite(10, 230.4);
+      lcd.print("90%");
+      break;
+    case 10:
+      analogWrite(10, 255);
+      lcd.setCursor(12, 1);
+      lcd.print("100%");
+      break;
+  }
+}
+
+void cameraTrigger(int b)
+{ switch (b)
+  { case 0:
+      lcd.setCursor(14, 1);
+      lcd.print ("NO");
+      analogWrite (2, 0);
+      break;
+    case 1:
+      lcd.setCursor(13, 1);
+      lcd.print ("YES");
+      analogWrite (2, 255);
+      break;
+  }
+}
